@@ -1,0 +1,84 @@
+{
+  "database": {
+    "description": "MySQL 数据库连接配置",
+    "type": "object",
+    "items": {
+      "host": {
+        "description": "数据库地址",
+        "type": "string",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "description": "数据库端口",
+        "type": "int",
+        "default": 3306
+      },
+      "user": {
+        "description": "数据库用户名",
+        "type": "string",
+        "default": "root"
+      },
+      "password": {
+        "description": "数据库密码",
+        "type": "string",
+        "default": "",
+        "obvious_hint": true
+      },
+      "database": {
+        "description": "用户库名",
+        "type": "string",
+        "default": "user"
+      },
+      "charset": {
+        "description": "字符集",
+        "type": "string",
+        "default": "utf8mb4"
+      }
+    }
+  },
+  "managed_group_ids": {
+    "description": "允许注册并需要守卫的QQ群号列表",
+    "type": "list",
+    "default": []
+  },
+  "password_min_length": {
+    "description": "密码最小长度",
+    "type": "int",
+    "default": 6
+  },
+  "ban_value": {
+    "description": "退群后写入封禁字段的值",
+    "type": "int",
+    "default": 1
+  },
+  "auto_ban_on_leave": {
+    "description": "收到退群事件时自动封号",
+    "type": "bool",
+    "default": true
+  },
+  "periodic_check_enabled": {
+    "description": "启用定时群成员兜底校验",
+    "type": "bool",
+    "default": true
+  },
+  "periodic_check_minutes": {
+    "description": "定时校验间隔分钟",
+    "type": "int",
+    "default": 30
+  },
+  "periodic_miss_threshold": {
+    "description": "连续缺席多少次后自动封号",
+    "type": "int",
+    "default": 2
+  },
+  "admin_notice_group_id": {
+    "description": "自动封号通知群号，留空则不通知",
+    "type": "string",
+    "default": ""
+  },
+  "create_audit_table": {
+    "description": "自动创建插件审计表",
+    "type": "bool",
+    "default": true
+  }
+}

@@ -1,0 +1,9 @@
+name: astrbot_plugin_qq_registration_guard
+display_name: QQ群注册守卫
+desc: 在指定QQ群内用QQ号注册游戏账号，并在退群后自动封号。
+version: v1.0.0
+author: jinlili1111
+repo: https://github.com/jinlili1111/astrbot_plugin_qq_registration_guard
+support_platforms:
+  - aiocqhttp
+astrbot_version: ">=4.0.0"
