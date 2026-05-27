@@ -24,7 +24,13 @@ class QQRegistrationGuardPlugin(Star):
 
     async def initialize(self):
         if self._get_bool("create_audit_table", True):
-            await asyncio.to_thread(self._ensure_audit_table)
+            try:
+                await asyncio.to_thread(self._ensure_audit_table)
+            except Exception as exc:
+                logger.warning(
+                    "QQRegistrationGuardPlugin audit table init skipped. "
+                    f"Please check database config: {exc}"
+                )
         if self._get_bool("periodic_check_enabled", True):
             self._check_task = asyncio.create_task(self._periodic_group_check())
         logger.info("QQRegistrationGuardPlugin initialized")
