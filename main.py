@@ -47,18 +47,16 @@ class QQRegistrationGuardPlugin(Star):
     @filter.command("注册")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def register_account(self, event: AiocqhttpMessageEvent, password: str = ""):
-        """群内注册账号，账号默认使用QQ号。"""
+        """私聊注册账号，账号默认使用QQ号。"""
         self._remember_bot(event)
-        group_error = self._group_context_error(event)
-        if group_error:
-            yield event.plain_result(group_error)
-            return
-
         qq = event.get_sender_id()
         group_id = event.get_group_id()
         password = (password or "").strip()
         min_length = self._get_int("password_min_length", 6)
 
+        if group_id:
+            yield event.plain_result("密码属于隐私，请私聊机器人发送：/注册 密码")
+            return
         if not password:
             yield event.plain_result("用法：/注册 密码")
             return
@@ -66,18 +64,59 @@ class QQRegistrationGuardPlugin(Star):
             yield event.plain_result(f"密码至少需要 {min_length} 位。")
             return
 
-        if not await self._is_group_member(event, group_id, qq):
-            yield event.plain_result("你不在受管群内，不能注册。")
+        member_group_id = await self._find_member_group(event, qq)
+        if not member_group_id:
+            yield event.plain_result("未检测到你在受管群内，不能注册。")
             return
 
-        result = await asyncio.to_thread(self._register_user, qq, password, group_id)
+        result = await asyncio.to_thread(
+            self._register_user, qq, password, member_group_id
+        )
         if result["success"]:
             await asyncio.to_thread(
-                self._record_audit, qq, group_id, "register", "user registered"
+                self._record_audit, qq, member_group_id, "register", "user registered"
             )
             yield event.plain_result(f"注册成功。账号：{qq}")
         else:
             yield event.plain_result(result["message"])
+
+    @filter.command("找回密码")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def recover_password(self, event: AiocqhttpMessageEvent, password: str = ""):
+        """私聊找回密码，只允许修改发送者QQ对应的账号。"""
+        self._remember_bot(event)
+        qq = event.get_sender_id()
+        group_id = event.get_group_id()
+        password = (password or "").strip()
+        min_length = self._get_int("password_min_length", 6)
+
+        if group_id:
+            yield event.plain_result("密码属于隐私，请私聊机器人发送：/找回密码 新密码")
+            return
+        if not password:
+            yield event.plain_result("用法：/找回密码 新密码")
+            return
+        if len(password) < min_length:
+            yield event.plain_result(f"密码至少需要 {min_length} 位。")
+            return
+
+        member_group_id = await self._find_member_group(event, qq)
+        if not member_group_id:
+            yield event.plain_result("未检测到你在受管群内，不能找回密码。")
+            return
+
+        result = await asyncio.to_thread(
+            self._reset_password, qq, password, member_group_id
+        )
+        if result["success"]:
+            await asyncio.to_thread(
+                self._record_audit,
+                qq,
+                member_group_id,
+                "reset_password",
+                "password reset by owner",
+            )
+        yield event.plain_result(result["message"])
 
     @filter.command("查注册")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -127,14 +166,6 @@ class QQRegistrationGuardPlugin(Star):
             self._bot = bot
             self._logged_missing_bot = False
 
-    def _group_context_error(self, event: AiocqhttpMessageEvent) -> str | None:
-        group_id = event.get_group_id()
-        if not group_id:
-            return "请在指定QQ群内使用注册命令。"
-        if group_id not in self._managed_groups():
-            return "当前群未开启注册。"
-        return None
-
     async def _is_group_member(
         self, event: AiocqhttpMessageEvent, group_id: str, qq: str
     ) -> bool:
@@ -146,6 +177,14 @@ class QQRegistrationGuardPlugin(Star):
         except Exception as exc:
             logger.warning(f"get_group_member_info failed group={group_id} qq={qq}: {exc}")
             return False
+
+    async def _find_member_group(
+        self, event: AiocqhttpMessageEvent, qq: str
+    ) -> str | None:
+        for group_id in self._managed_groups():
+            if await self._is_group_member(event, group_id, qq):
+                return group_id
+        return None
 
     async def _periodic_group_check(self):
         await asyncio.sleep(15)
@@ -348,6 +387,23 @@ class QQRegistrationGuardPlugin(Star):
         except Exception as exc:
             logger.exception(f"register user failed qq={qq} group={group_id}: {exc}")
             return {"success": False, "message": f"注册失败：{exc}"}
+
+    def _reset_password(self, qq: str, password: str, group_id: str) -> dict[str, Any]:
+        try:
+            if not self._get_user_by_name(qq):
+                return {"success": False, "message": "当前QQ尚未注册，无法找回密码。"}
+
+            columns = self._table_columns("user")
+            lookup = {col.lower(): col for col in columns}
+            password_col = lookup.get("password", "Password")
+            self._execute_update(
+                f"UPDATE user SET `{password_col}` = %s WHERE Name = %s",
+                (password, qq),
+            )
+            return {"success": True, "message": "密码已更新。"}
+        except Exception as exc:
+            logger.exception(f"reset password failed qq={qq} group={group_id}: {exc}")
+            return {"success": False, "message": f"找回密码失败：{exc}"}
 
     def _ban_registered_user(self, qq: str, group_id: str, reason: str) -> bool:
         user = self._get_user_by_name(qq)
