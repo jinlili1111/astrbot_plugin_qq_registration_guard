@@ -1,4 +1,5 @@
 import asyncio
+import string
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
@@ -60,8 +61,9 @@ class QQRegistrationGuardPlugin(Star):
         if not password:
             yield event.plain_result("用法：/注册 密码")
             return
-        if len(password) < min_length:
-            yield event.plain_result(f"密码至少需要 {min_length} 位。")
+        password_error = self._password_error(password, min_length)
+        if password_error:
+            yield event.plain_result(password_error)
             return
 
         member_group_id = await self._find_member_group(event, qq)
@@ -96,8 +98,9 @@ class QQRegistrationGuardPlugin(Star):
         if not password:
             yield event.plain_result("用法：/找回密码 新密码")
             return
-        if len(password) < min_length:
-            yield event.plain_result(f"密码至少需要 {min_length} 位。")
+        password_error = self._password_error(password, min_length)
+        if password_error:
+            yield event.plain_result(password_error)
             return
 
         member_group_id = await self._find_member_group(event, qq)
@@ -184,6 +187,21 @@ class QQRegistrationGuardPlugin(Star):
         for group_id in self._managed_groups():
             if await self._is_group_member(event, group_id, qq):
                 return group_id
+        return None
+
+    def _password_error(self, password: str, min_length: int) -> str | None:
+        min_length = max(8, min_length)
+        if len(password) < min_length:
+            return f"密码至少需要 {min_length} 位。"
+        checks = [
+            (any(ch.islower() for ch in password), "小写字母"),
+            (any(ch.isupper() for ch in password), "大写字母"),
+            (any(ch.isdigit() for ch in password), "数字"),
+            (any(ch in string.punctuation for ch in password), "标点符号"),
+        ]
+        missing = [name for ok, name in checks if not ok]
+        if missing:
+            return "密码必须同时包含小写字母、大写字母、数字和标点符号。"
         return None
 
     async def _periodic_group_check(self):
