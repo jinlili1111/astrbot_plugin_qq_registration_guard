@@ -42,9 +42,9 @@
     "default": []
   },
   "password_min_length": {
-    "description": "密码最小长度",
+    "description": "密码最小长度，实际不会低于8位",
     "type": "int",
-    "default": 6
+    "default": 8
   },
   "ban_value": {
     "description": "退群后写入封禁字段的值",
