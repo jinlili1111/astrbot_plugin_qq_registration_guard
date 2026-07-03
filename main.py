@@ -53,22 +53,33 @@ class QQRegistrationGuardPlugin(Star):
         qq = event.get_sender_id()
         group_id = event.get_group_id()
         password = (password or "").strip()
-        min_length = self._get_int("password_min_length", 6)
 
+        # 群聊里发密码会泄露给其他群成员，直接判为失败并给出正确方式
         if group_id:
-            yield event.plain_result("密码属于隐私，请私聊机器人发送：/注册 密码")
+            yield event.plain_result(
+                "❌ 注册失败：不能在群里发送密码（会被其他群成员看到）。\n\n"
+                + self._registration_help(qq)
+            )
             return
         if not password:
-            yield event.plain_result("用法：/注册 密码")
+            yield event.plain_result(
+                "❌ 注册失败：没有填写密码。\n\n" + self._registration_help(qq)
+            )
             return
-        password_error = self._password_error(password, min_length)
+        password_error = self._password_error(password)
         if password_error:
-            yield event.plain_result(password_error)
+            yield event.plain_result(
+                f"❌ 注册失败：{password_error}\n\n" + self._registration_help(qq)
+            )
             return
 
         member_group_id = await self._find_member_group(event, qq)
         if not member_group_id:
-            yield event.plain_result("未检测到你在受管群内，不能注册。")
+            yield event.plain_result(
+                "❌ 注册失败：没有检测到你在官方受管QQ群内"
+                "（也可能是机器人暂时查不到群成员信息）。\n\n"
+                + self._registration_help(qq)
+            )
             return
 
         result = await asyncio.to_thread(
@@ -78,8 +89,12 @@ class QQRegistrationGuardPlugin(Star):
             await asyncio.to_thread(
                 self._record_audit, qq, member_group_id, "register", "user registered"
             )
-            yield event.plain_result(f"注册成功。账号：{qq}")
+            yield event.plain_result(
+                f"✅ 注册成功！\n账号（就是你的QQ号）：{qq}\n"
+                "现在可以用这个账号和你刚设置的密码登录游戏了。"
+            )
         else:
+            # _register_user 已给出针对性原因和后续指引
             yield event.plain_result(result["message"])
 
     @filter.command("找回密码")
@@ -90,7 +105,6 @@ class QQRegistrationGuardPlugin(Star):
         qq = event.get_sender_id()
         group_id = event.get_group_id()
         password = (password or "").strip()
-        min_length = self._get_int("password_min_length", 6)
 
         if group_id:
             yield event.plain_result("密码属于隐私，请私聊机器人发送：/找回密码 新密码")
@@ -98,7 +112,7 @@ class QQRegistrationGuardPlugin(Star):
         if not password:
             yield event.plain_result("用法：/找回密码 新密码")
             return
-        password_error = self._password_error(password, min_length)
+        password_error = self._password_error(password)
         if password_error:
             yield event.plain_result(password_error)
             return
@@ -129,19 +143,64 @@ class QQRegistrationGuardPlugin(Star):
         qq = event.get_sender_id()
         user = await asyncio.to_thread(self._get_user_by_name, qq)
         if not user:
-            yield event.plain_result("当前QQ尚未注册。")
+            yield event.plain_result("当前QQ尚未注册。\n私聊发送 /注册 密码 即可注册。")
             return
         ban_value = self._get_user_ban_value(user)
-        status = "已封禁" if ban_value else "正常"
-        yield event.plain_result(f"账号：{qq}\n状态：{status}")
+        if ban_value:
+            yield event.plain_result(
+                f"账号：{qq}\n状态：已封禁\n"
+                "如果是退群被自动封的，重新加入官方QQ群后，私聊发送 /解封 即可自助解封。"
+            )
+        else:
+            yield event.plain_result(f"账号：{qq}\n状态：正常")
+
+    @filter.command("解封")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def unban_account(self, event: AiocqhttpMessageEvent):
+        """自助解封：仅能解除本人因退群被插件自动封禁的账号。"""
+        self._remember_bot(event)
+        qq = event.get_sender_id()
+
+        user = await asyncio.to_thread(self._get_user_by_name, qq)
+        if not user:
+            yield event.plain_result(
+                "❌ 解封失败：当前QQ还没有注册账号。\n请先私聊发送：/注册 密码"
+            )
+            return
+        if not self._get_user_ban_value(user):
+            yield event.plain_result("✅ 你的账号目前是正常状态，无需解封。")
+            return
+
+        member_group_id = await self._find_member_group(event, qq)
+        if not member_group_id:
+            yield event.plain_result(
+                "❌ 解封失败：没有检测到你在官方受管QQ群内。\n"
+                "账号是退群后被自动封禁的，请先重新加入官方QQ群，再私聊发送 /解封。"
+            )
+            return
+
+        if not await asyncio.to_thread(self._can_self_unban, qq):
+            yield event.plain_result(
+                "❌ 解封失败：你的账号不是因退群被自动封禁的（可能是管理员手动封禁）。\n"
+                "这种情况请联系管理员处理。"
+            )
+            return
+
+        ok = await asyncio.to_thread(self._unban_user, qq, member_group_id, "self_unban")
+        if ok:
+            yield event.plain_result(
+                f"✅ 解封成功！账号：{qq}\n现在可以正常登录游戏了。"
+            )
+        else:
+            yield event.plain_result(
+                "❌ 解封失败：服务器处理时出现异常，请稍后再试或联系管理员。"
+            )
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def on_all_events(self, event: AstrMessageEvent):
-        """监听 OneBot notice 事件，处理退群自动封号。"""
+        """监听 OneBot notice：退群自动封号 / 重新进群自动解封。"""
         self._remember_bot(event)
-        if not self._get_bool("auto_ban_on_leave", True):
-            return
         raw = getattr(event.message_obj, "raw_message", None)
         if not raw:
             return
@@ -152,16 +211,36 @@ class QQRegistrationGuardPlugin(Star):
             user_id = str(raw.get("user_id") or "")
         except AttributeError:
             return
-        if post_type != "notice" or notice_type != "group_decrease":
+        if post_type != "notice":
             return
         if not group_id or not user_id or group_id not in self._managed_groups():
             return
 
-        ok = await asyncio.to_thread(
-            self._ban_registered_user, user_id, group_id, "leave_notice"
-        )
-        if ok:
-            await self._notify_admin(event, f"检测到 QQ {user_id} 退出群 {group_id}，已自动封号。")
+        if notice_type == "group_decrease":
+            if not self._get_bool("auto_ban_on_leave", True):
+                return
+            ok = await asyncio.to_thread(
+                self._ban_registered_user, user_id, group_id, "leave_notice"
+            )
+            if ok:
+                await self._notify_admin(
+                    event, f"检测到 QQ {user_id} 退出群 {group_id}，已自动封号。"
+                )
+        elif notice_type == "group_increase":
+            if not self._get_bool("auto_unban_on_rejoin", False):
+                return
+            user = await asyncio.to_thread(self._get_user_by_name, user_id)
+            if not user or not self._get_user_ban_value(user):
+                return
+            if not await asyncio.to_thread(self._can_self_unban, user_id):
+                return
+            ok = await asyncio.to_thread(
+                self._unban_user, user_id, group_id, "auto_unban"
+            )
+            if ok:
+                await self._notify_admin(
+                    event, f"检测到 QQ {user_id} 重新加入群 {group_id}，已自动解封。"
+                )
 
     def _remember_bot(self, event: AstrMessageEvent):
         bot = getattr(event, "bot", None)
@@ -189,10 +268,27 @@ class QQRegistrationGuardPlugin(Star):
                 return group_id
         return None
 
-    def _password_error(self, password: str, min_length: int) -> str | None:
-        min_length = max(8, min_length)
+    def _effective_min_length(self) -> int:
+        return max(8, self._get_int("password_min_length", 8))
+
+    def _registration_help(self, qq: str | None = None) -> str:
+        min_length = self._effective_min_length()
+        lines = [
+            "正确的注册方式：",
+            "1. 先加入官方受管QQ群（不在群里无法注册）。",
+            "2. 私聊机器人本人（不要在群里发密码，避免泄露）。",
+            "3. 发送：/注册 你的密码",
+            f"   密码要求：至少 {min_length} 位，且同时包含大写字母、小写字母、数字和标点符号。",
+            "   例如：/注册 Abc12345!",
+        ]
+        if qq:
+            lines.append(f"注册成功后，账号就是你的QQ号：{qq}")
+        return "\n".join(lines)
+
+    def _password_error(self, password: str) -> str | None:
+        min_length = self._effective_min_length()
         if len(password) < min_length:
-            return f"密码至少需要 {min_length} 位。"
+            return f"密码太短，至少需要 {min_length} 位。"
         checks = [
             (any(ch.islower() for ch in password), "小写字母"),
             (any(ch.isupper() for ch in password), "大写字母"),
@@ -369,7 +465,14 @@ class QQRegistrationGuardPlugin(Star):
     def _register_user(self, qq: str, password: str, group_id: str) -> dict[str, Any]:
         try:
             if self._get_user_by_name(qq):
-                return {"success": False, "message": "当前QQ已注册账号。"}
+                return {
+                    "success": False,
+                    "message": (
+                        "该QQ已经注册过账号了，不需要重复注册。\n"
+                        "· 忘记密码：私聊发送 /找回密码 新密码\n"
+                        "· 查询状态：发送 /查注册"
+                    ),
+                }
 
             columns = self._table_columns("user")
             lookup = {col.lower(): col for col in columns}
@@ -404,7 +507,10 @@ class QQRegistrationGuardPlugin(Star):
             return {"success": True, "message": "注册成功"}
         except Exception as exc:
             logger.exception(f"register user failed qq={qq} group={group_id}: {exc}")
-            return {"success": False, "message": f"注册失败：{exc}"}
+            return {
+                "success": False,
+                "message": "服务器暂时无法完成注册（数据库异常），请稍后再试或联系管理员。",
+            }
 
     def _reset_password(self, qq: str, password: str, group_id: str) -> dict[str, Any]:
         try:
@@ -436,6 +542,47 @@ class QQRegistrationGuardPlugin(Star):
         )
         self._record_audit(qq, group_id, "auto_ban", reason)
         logger.info(f"auto banned qq={qq} group={group_id} reason={reason}")
+        return True
+
+    def _latest_ban_or_unban_action(self, qq: str) -> str | None:
+        """取该QQ最近一次封/解封动作，用于判断当前封禁是否由本插件所为。"""
+        try:
+            row = self._execute_query(
+                """
+                SELECT action FROM astrbot_qq_registration_guard
+                WHERE qq = %s
+                  AND action IN ('auto_ban', 'self_unban', 'auto_unban', 'admin_unban')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (int(qq),),
+                fetch_one=True,
+            )
+            return row["action"] if row else None
+        except Exception as exc:
+            logger.warning(f"query latest ban/unban action failed qq={qq}: {exc}")
+            return None
+
+    def _can_self_unban(self, qq: str) -> bool:
+        # 仅允许解除“本插件因退群自动封禁”的账号，避免绕过管理员的手动封禁
+        if not self._get_bool("create_audit_table", True):
+            return False
+        return self._latest_ban_or_unban_action(qq) == "auto_ban"
+
+    def _unban_user(self, qq: str, group_id: str, action: str) -> bool:
+        user = self._get_user_by_name(qq)
+        if not user:
+            return False
+        ban_col = self._get_ban_column()
+        try:
+            self._execute_update(
+                f"UPDATE user SET `{ban_col}` = 0 WHERE Name = %s",
+                (qq,),
+            )
+        except Exception as exc:
+            logger.exception(f"unban user failed qq={qq} group={group_id}: {exc}")
+            return False
+        self._record_audit(qq, group_id, action, "account unbanned")
+        logger.info(f"unbanned qq={qq} group={group_id} action={action}")
         return True
 
     def _ensure_audit_table(self):
