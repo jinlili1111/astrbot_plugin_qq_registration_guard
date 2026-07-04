@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 import string
 from contextlib import contextmanager
 from datetime import datetime
@@ -48,30 +49,31 @@ class QQRegistrationGuardPlugin(Star):
     @filter.command("注册")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def register_account(self, event: AiocqhttpMessageEvent, password: str = ""):
-        """私聊注册账号，账号默认使用QQ号。"""
+        """私聊注册账号；账号用QQ号。/注册 直接生成随机密码，/注册 密码 用自定义密码。"""
         self._remember_bot(event)
         qq = event.get_sender_id()
         group_id = event.get_group_id()
         password = (password or "").strip()
 
-        # 群聊里发密码会泄露给其他群成员，直接判为失败并给出正确方式
+        # 密码属于隐私（尤其自动生成的初始密码），只在私聊处理
         if group_id:
             yield event.plain_result(
-                "❌ 注册失败：不能在群里发送密码（会被其他群成员看到）。\n\n"
-                + self._registration_help(qq)
+                "请私聊我发送 /注册 即可自动注册（不用自己想密码，我会给你生成一个）。\n"
+                "⚠️ 也不要在群里发密码，会被其他群成员看到。"
             )
             return
+
+        auto_generated = False
         if not password:
-            yield event.plain_result(
-                "❌ 注册失败：没有填写密码。\n\n" + self._registration_help(qq)
-            )
-            return
-        password_error = self._password_error(password)
-        if password_error:
-            yield event.plain_result(
-                f"❌ 注册失败：{password_error}\n\n" + self._registration_help(qq)
-            )
-            return
+            password = self._generate_password()
+            auto_generated = True
+        else:
+            password_error = self._password_error(password)
+            if password_error:
+                yield event.plain_result(
+                    f"❌ 注册失败：{password_error}\n\n" + self._registration_help(qq)
+                )
+                return
 
         member_group_id = await self._find_member_group(event, qq)
         if not member_group_id:
@@ -85,17 +87,29 @@ class QQRegistrationGuardPlugin(Star):
         result = await asyncio.to_thread(
             self._register_user, qq, password, member_group_id
         )
-        if result["success"]:
-            await asyncio.to_thread(
-                self._record_audit, qq, member_group_id, "register", "user registered"
-            )
-            yield event.plain_result(
-                f"✅ 注册成功！\n账号（就是你的QQ号）：{qq}\n"
-                "现在可以用这个账号和你刚设置的密码登录游戏了。"
-            )
-        else:
+        if not result["success"]:
             # _register_user 已给出针对性原因和后续指引
             yield event.plain_result(result["message"])
+            return
+
+        await asyncio.to_thread(
+            self._record_audit, qq, member_group_id, "register", "user registered"
+        )
+        if auto_generated:
+            yield event.plain_result(
+                "✅ 注册成功！\n"
+                f"账号（你的QQ号）：{qq}\n"
+                f"初始密码：{password}\n\n"
+                "⚠️ 这是随机生成的密码，请先复制保存，再进游戏登录。\n"
+                "想改成自己的密码：私聊我发送  /找回密码 新密码\n"
+                "（新密码至少8位，且同时包含大写字母、小写字母、数字和标点，例：Abc12345!）"
+            )
+        else:
+            yield event.plain_result(
+                f"✅ 注册成功！\n账号（你的QQ号）：{qq}\n"
+                "现在可以用这个账号和你刚设置的密码登录游戏了。\n"
+                "想改密码：私聊我发送  /找回密码 新密码"
+            )
 
     @filter.command("找回密码")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -179,7 +193,9 @@ class QQRegistrationGuardPlugin(Star):
             )
             return
 
-        if not await asyncio.to_thread(self._can_self_unban, qq):
+        if self._get_bool("unban_only_auto_banned", False) and not await asyncio.to_thread(
+            self._can_self_unban, qq
+        ):
             yield event.plain_result(
                 "❌ 解封失败：你的账号不是因退群被自动封禁的（可能是管理员手动封禁）。\n"
                 "这种情况请联系管理员处理。"
@@ -232,7 +248,9 @@ class QQRegistrationGuardPlugin(Star):
             user = await asyncio.to_thread(self._get_user_by_name, user_id)
             if not user or not self._get_user_ban_value(user):
                 return
-            if not await asyncio.to_thread(self._can_self_unban, user_id):
+            if self._get_bool("unban_only_auto_banned", False) and not await asyncio.to_thread(
+                self._can_self_unban, user_id
+            ):
                 return
             ok = await asyncio.to_thread(
                 self._unban_user, user_id, group_id, "auto_unban"
@@ -277,9 +295,9 @@ class QQRegistrationGuardPlugin(Star):
             "正确的注册方式：",
             "1. 先加入官方受管QQ群（不在群里无法注册）。",
             "2. 私聊机器人本人（不要在群里发密码，避免泄露）。",
-            "3. 发送：/注册 你的密码",
-            f"   密码要求：至少 {min_length} 位，且同时包含大写字母、小写字母、数字和标点符号。",
-            "   例如：/注册 Abc12345!",
+            "3. 直接发送 /注册（我会自动生成密码），或发送 /注册 你自己的密码。",
+            f"   自己设密码需至少 {min_length} 位，且同时含大写字母、小写字母、数字和标点（例：/注册 Abc12345!）。",
+            "   注册后可私聊发送 /找回密码 新密码 修改。",
         ]
         if qq:
             lines.append(f"注册成功后，账号就是你的QQ号：{qq}")
@@ -299,6 +317,29 @@ class QQRegistrationGuardPlugin(Star):
         if missing:
             return "密码必须同时包含小写字母、大写字母、数字和标点符号。"
         return None
+
+    def _generate_password(self) -> str:
+        """生成一个满足强密码规则、且避开易混字符的随机密码。"""
+        length = max(self._effective_min_length(), 10)
+        lowers = "abcdefghijkmnpqrstuvwxyz"  # 去掉 l o
+        uppers = "ABCDEFGHJKLMNPQRSTUVWXYZ"  # 去掉 I O
+        digits = "23456789"  # 去掉 0 1
+        puncts = "!@#$%*"
+        pool = lowers + uppers + digits + puncts
+        rng = secrets.SystemRandom()
+        for _ in range(50):
+            chars = [
+                secrets.choice(lowers),
+                secrets.choice(uppers),
+                secrets.choice(digits),
+                secrets.choice(puncts),
+            ]
+            chars += [secrets.choice(pool) for _ in range(length - 4)]
+            rng.shuffle(chars)
+            candidate = "".join(chars)
+            if self._password_error(candidate) is None:
+                return candidate
+        return "Aa2!" + "".join(secrets.choice(pool) for _ in range(max(4, length - 4)))
 
     async def _periodic_group_check(self):
         await asyncio.sleep(15)

@@ -57,7 +57,12 @@
     "default": true
   },
   "auto_unban_on_rejoin": {
-    "description": "重新加群时自动解封（仅解除本插件因退群自动封的号）；默认关闭，需要时手动开启",
+    "description": "重新加群时自动解封；默认关闭，需要时手动开启",
+    "type": "bool",
+    "default": false
+  },
+  "unban_only_auto_banned": {
+    "description": "解封是否校验封禁来源：true=仅能解本插件因退群自动封的号；false=只要在受管群内就能解封（默认，不限制）",
     "type": "bool",
     "default": false
   },

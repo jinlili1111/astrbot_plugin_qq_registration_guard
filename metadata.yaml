@@ -1,7 +1,7 @@
 name: astrbot_plugin_qq_registration_guard
 display_name: QQ群注册守卫
 desc: 在指定QQ群内用QQ号注册游戏账号，退群自动封号，回群可用 /解封 自助解封。
-version: v1.1.0
+version: v1.3.0
 author: jinlili1111
 repo: https://github.com/jinlili1111/astrbot_plugin_qq_registration_guard
 support_platforms:
